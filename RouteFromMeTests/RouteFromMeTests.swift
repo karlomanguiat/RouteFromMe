@@ -6,31 +6,139 @@
 //
 
 import XCTest
+import MapKit
 @testable import RouteFromMe
 
 final class RouteFromMeTests: XCTestCase {
 
-    override func setUpWithError() throws {
-        // Put setup code here. This method is called before the invocation of each test method in the class.
-    }
+    // Mocks
+    class MockUserService: UserServiceProtocol {
+        var shouldReturnUser = true
+        var userToReturn: User? = nil
 
-    override func tearDownWithError() throws {
-        // Put teardown code here. This method is called after the invocation of each test method in the class.
-    }
-
-    func testExample() throws {
-        // This is an example of a functional test case.
-        // Use XCTAssert and related functions to verify your tests produce the correct results.
-        // Any test you write for XCTest can be annotated as throws and async.
-        // Mark your test throws to produce an unexpected failure when your test encounters an uncaught error.
-        // Mark your test async to allow awaiting for asynchronous code to complete. Check the results with assertions afterwards.
-    }
-
-    func testPerformanceExample() throws {
-        // This is an example of a performance test case.
-        self.measure {
-            // Put the code you want to measure the time of here.
+        func fetchUser(completion: @escaping (User?) -> Void) {
+            if shouldReturnUser {
+                completion(userToReturn)
+            } else {
+                completion(nil)
+            }
         }
     }
 
+    class MockLocationService: LocationServiceProtocol {
+        var lastKnownLocation: CLLocationCoordinate2D?
+        weak var delegate: LocationServiceDelegate?
+
+        func setup() {
+            // Simulate location update
+            let mockLocation = CLLocationCoordinate2D(latitude: 37.7749, longitude: -122.4194) // San Francisco
+            delegate?.didUpdateLocation(mockLocation)
+        }
+    }
+
+    // Delegate recorder
+    class DelegateRecorder: MapViewModelDelegate {
+        var routeCalled = false
+        var route: MKRoute?
+        var error: String?
+
+        var fromCoordinate: CLLocationCoordinate2D?
+        var toCoordinate: CLLocationCoordinate2D?
+        var userName: String?
+
+        func didLoadRoute(_ route: MKRoute, from: CLLocationCoordinate2D, to: CLLocationCoordinate2D, toName: String) {
+            routeCalled = true
+            self.route = route
+            self.fromCoordinate = from
+            self.toCoordinate = to
+            self.userName = toName
+        }
+
+        func didFail(_ error: String) {
+            self.error = error
+        }
+    }
+    
+    func test_fetchRoute_success() {
+        let mockUser = User(name: "Dio", address: Address(geo: Geo(lat: "37.7793", lng: "-122.4192")))
+        
+        let mockUserService = MockUserService()
+        mockUserService.shouldReturnUser = true
+        mockUserService.userToReturn = mockUser
+        
+        let mockLocationService = MockLocationService()
+        let mockDelegateRecorder = DelegateRecorder()
+        let viewModel = MapViewModel(userService: mockUserService, locationService: mockLocationService)
+        
+        viewModel.delegate = mockDelegateRecorder
+        
+        let promise = expectation(description: "Fetch route success")
+        
+        viewModel.fetchRouteToUser()
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            if mockDelegateRecorder.routeCalled {
+                XCTAssertEqual(mockDelegateRecorder.userName, "Dio")
+                XCTAssertNotNil(mockDelegateRecorder.route)
+                promise.fulfill()
+            } else if let error = mockDelegateRecorder.error {
+                XCTFail("Expected success, got error: \(error)")
+                promise.fulfill()
+            } else {
+                XCTFail("Neither success nor failure callback was called.")
+                promise.fulfill()
+            }
+        }
+        
+        waitForExpectations(timeout: 5.0)
+    }
+    
+    func test_fetchRoute_failure() {
+        let mockUserService = MockUserService()
+        mockUserService.shouldReturnUser = false
+        
+        let mockLocationService = MockLocationService()
+        let mockDelegateRecorder = DelegateRecorder()
+        
+        let viewModel = MapViewModel(userService: mockUserService, locationService: mockLocationService)
+        viewModel.delegate = mockDelegateRecorder
+        
+        let promise = expectation(description: "Fetch route failure")
+        
+        viewModel.fetchRouteToUser()
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            XCTAssertNil(mockDelegateRecorder.route)
+            XCTAssertNil(mockDelegateRecorder.userName)
+            promise.fulfill()
+        }
+        waitForExpectations(timeout: 3.0)
+    }
+    
+    
+    func test_fetchRoute_invalidCoordinates() {
+        let mockUser = User(name: "Dio", address: Address(geo: Geo(lat: "invalid", lng: "invalid")))
+        
+        let mockUserService = MockUserService()
+        mockUserService.shouldReturnUser = true
+        mockUserService.userToReturn = mockUser
+        
+        let mockLocationService = MockLocationService()
+        let mockDelegateRecorder = DelegateRecorder()
+        
+        let viewModel = MapViewModel(userService: mockUserService, locationService: mockLocationService)
+        
+        viewModel.delegate = mockDelegateRecorder
+        
+        let promise = expectation(description: "Fetch route failure - Invalid coordinates")
+        viewModel.fetchRouteToUser()
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            XCTAssertNil(mockDelegateRecorder.route)
+            XCTAssertEqual(mockDelegateRecorder.error, "Failed to fetch user location")
+            promise.fulfill()
+        }
+        
+        waitForExpectations(timeout: 5.0)
+    }
 }
